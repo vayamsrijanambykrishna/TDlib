@@ -15,6 +15,20 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Create 4GB Swap Space (RAM Safety)
+        run: |
+          sudo fallocate -l 4G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
       - name: Install Build Tools & Dependencies
         run: |
           sudo apt-get update
@@ -45,13 +59,10 @@ jobs:
           make install_sw
           cd ..
           
-          # दोनों lib और lib64 फोल्डर्स में फाइल्स सुनिश्चित करें
           mkdir -p $GITHUB_WORKSPACE/openssl_arm64/lib
           if [ -d "$GITHUB_WORKSPACE/openssl_arm64/lib64" ]; then
               cp -rf $GITHUB_WORKSPACE/openssl_arm64/lib64/* $GITHUB_WORKSPACE/openssl_arm64/lib/ 2>/dev/null || true
           fi
-          
-          ls -la $GITHUB_WORKSPACE/openssl_arm64/lib/
 
       - name: 2. Clone and Compile TDLib (JNI Engine)
         run: |
@@ -70,12 +81,16 @@ jobs:
                 -DOPENSSL_SSL_LIBRARY=$GITHUB_WORKSPACE/openssl_arm64/lib/libssl.a \
                 -DOPENSSL_USE_STATIC_LIBS=TRUE \
                 -DTD_ENABLE_JNI=ON \
+                -DJNI_FOUND=TRUE \
+                -DJNI_INCLUDE_DIRS="$JAVA_HOME/include;$JAVA_HOME/include/linux" \
+                -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+                -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
                 -GNinja ..
 
-          # RAM सेफ मोड में असली C++ कंपाइलेशन
+          # असली C++ कंपाइलेशन शुरू (लगभग 40-50 मिनट)
           ninja -j 2 tdjni
 
-          # तैयार फाइल्स को प्रोजेक्ट फोल्डर में कॉपी करें
+          # तैयार बाइनरी और जावा फाइल्स कॉपी करें
           find . -name "libtdjni.so" -exec cp {} $GITHUB_WORKSPACE/jniLibs/arm64-v8a/ \;
           find . -name "TdApi.java" -exec cp {} $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/ \;
           cp ../example/android/src/org/drinkless/td/libcore/telegram/Client.java $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/
