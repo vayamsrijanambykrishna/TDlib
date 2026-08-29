@@ -66,11 +66,19 @@ jobs:
               cp -rf $GITHUB_WORKSPACE/openssl_arm64/lib64/* $GITHUB_WORKSPACE/openssl_arm64/lib/ 2>/dev/null || true
           fi
 
-      - name: 2. Clone and Compile TDLib Android JNI (example/android)
+      - name: 2. Generate TDLib Source Files (Host Step)
         run: |
           git clone https://github.com/tdlib/td.git
+          cd td
           
-          # Android JNI बिल्ड डायरेक्टरी में जाएं
+          # होस्ट मशीन पर ऑटो-जेनरेटेड फाइल्स तैयार करें (takes ~15 seconds)
+          mkdir build_host && cd build_host
+          cmake -DCMAKE_BUILD_TYPE=Release -GNinja ..
+          ninja prepare_cross_compiling
+          cd ../..
+
+      - name: 3. Compile TDLib Android JNI (example/android)
+        run: |
           cd td/example/android
           mkdir build && cd build
 
@@ -86,16 +94,16 @@ jobs:
                 -DOPENSSL_USE_STATIC_LIBS=TRUE \
                 -GNinja ..
 
-          # असली C++ इंजन कंपाइलेशन (RAM-Safe Mode: 2 Threads)
+          # मुख्य 578 फाइल्स का C++ कंपाइलेशन
           ninja -j 2 tdjni
 
-          # तैयार फाइल्स को प्रोजेक्ट फोल्डर्स में कॉपी करें
+          # तैयार बाइनरी और जावा फाइल्स को टारगेट फोल्डर्स में कॉपी करें
           find $GITHUB_WORKSPACE/td -name "libtdjni.so" -exec cp {} $GITHUB_WORKSPACE/jniLibs/arm64-v8a/ \;
           find $GITHUB_WORKSPACE/td -name "TdApi.java" -exec cp {} $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/ \;
           cp $GITHUB_WORKSPACE/td/example/android/src/org/drinkless/td/libcore/telegram/Client.java $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/
           cd ../../../..
 
-      - name: 3. Verify Compiled Files
+      - name: 4. Verify Compiled Files
         run: |
           echo "=== Compilation Verification ==="
           ls -lh jniLibs/arm64-v8a/
@@ -107,7 +115,7 @@ jobs:
               exit 1
           fi
 
-      - name: 4. Commit and Push Pure Binaries to Repo
+      - name: 5. Commit and Push Pure Binaries to Repo
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
