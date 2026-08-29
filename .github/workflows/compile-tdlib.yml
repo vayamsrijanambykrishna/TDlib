@@ -9,7 +9,7 @@ permissions:
 jobs:
   build-tdlib:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # GitHub 6 घंटे की छूट देता है
+    timeout-minutes: 360
 
     steps:
       - name: Checkout Repository
@@ -18,27 +18,38 @@ jobs:
       - name: Install Build Tools & Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y make git zlib1g-dev libssl-dev gperf cmake clang libc++-dev libc++abi-dev php-cli ninja-build
+          sudo apt-get install -y make git zlib1g-dev gperf cmake clang libc++-dev libc++abi-dev php-cli ninja-build
 
       - name: Create Destination Folders
         run: |
           mkdir -p jniLibs/arm64-v8a
           mkdir -p java/org/drinkless/td/libcore/telegram
 
-      - name: 1. Clone and Compile OpenSSL for Android (ARM64)
+      - name: 1. Clone and Compile OpenSSL 3 for Android Clang (ARM64)
         run: |
-          echo "Cloning official OpenSSL..."
-          git clone --depth 1 --branch OpenSSL_1_1_1w https://github.com/openssl/openssl.git
+          echo "Cloning OpenSSL 3.x (Modern Clang supported)..."
+          git clone --depth 1 --branch openssl-3.1.5 https://github.com/openssl/openssl.git
           cd openssl
           
           export ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME
           export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
           
-          echo "Configuring OpenSSL for android-arm64..."
-          ./Configure android-arm64 -D__ANDROID_API__=24 no-shared no-tests --prefix=$GITHUB_WORKSPACE/openssl_arm64
+          echo "Configuring OpenSSL for android-arm64 with Clang..."
+          ./Configure android-arm64 \
+                      -D__ANDROID_API__=24 \
+                      no-shared \
+                      no-tests \
+                      no-unit-test \
+                      --prefix=$GITHUB_WORKSPACE/openssl_arm64
+                      
           make -j2
           make install_sw
           cd ..
+          
+          # Fix lib64 symlink if created
+          if [ -d "$GITHUB_WORKSPACE/openssl_arm64/lib64" ]; then
+              cp -r $GITHUB_WORKSPACE/openssl_arm64/lib64/* $GITHUB_WORKSPACE/openssl_arm64/lib/ 2>/dev/null || true
+          fi
 
       - name: 2. Clone and Compile TDLib (JNI Engine)
         run: |
@@ -54,13 +65,11 @@ jobs:
                 -DANDROID_PLATFORM=android-24 \
                 -DANDROID_STL=c++_static \
                 -DOPENSSL_ROOT_DIR=$GITHUB_WORKSPACE/openssl_arm64 \
-                -DOPENSSL_CRYPTO_LIBRARY=$GITHUB_WORKSPACE/openssl_arm64/lib/libcrypto.a \
-                -DOPENSSL_SSL_LIBRARY=$GITHUB_WORKSPACE/openssl_arm64/lib/libssl.a \
                 -DOPENSSL_INCLUDE_DIR=$GITHUB_WORKSPACE/openssl_arm64/include \
                 -DTD_ENABLE_JNI=ON \
                 -GNinja ..
 
-          echo "Compiling tdjni (RAM Safety: -j 2)..."
+          echo "Compiling tdjni (RAM Safe Mode: -j 2)..."
           ninja -j 2 tdjni
 
           echo "Copying compiled .so and Java SDK to target directories..."
