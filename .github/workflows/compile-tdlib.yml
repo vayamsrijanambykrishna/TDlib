@@ -1,0 +1,91 @@
+name: Compile Official TDLib from Source
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-tdlib:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360 # GitHub 6 घंटे की छूट देता है
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Build Tools & Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make git zlib1g-dev libssl-dev gperf cmake clang libc++-dev libc++abi-dev php-cli ninja-build
+
+      - name: Create Destination Folders
+        run: |
+          mkdir -p jniLibs/arm64-v8a
+          mkdir -p java/org/drinkless/td/libcore/telegram
+
+      - name: 1. Clone and Compile OpenSSL for Android (ARM64)
+        run: |
+          echo "Cloning official OpenSSL..."
+          git clone --depth 1 --branch OpenSSL_1_1_1w https://github.com/openssl/openssl.git
+          cd openssl
+          
+          export ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME
+          export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          
+          echo "Configuring OpenSSL for android-arm64..."
+          ./Configure android-arm64 -D__ANDROID_API__=24 no-shared no-tests --prefix=$GITHUB_WORKSPACE/openssl_arm64
+          make -j2
+          make install_sw
+          cd ..
+
+      - name: 2. Clone and Compile TDLib (JNI Engine)
+        run: |
+          echo "Cloning official Telegram TDLib..."
+          git clone https://github.com/tdlib/td.git
+          cd td
+          mkdir build && cd build
+
+          echo "Configuring CMake with Android NDK Toolchain..."
+          cmake -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
+                -DANDROID_ABI=arm64-v8a \
+                -DANDROID_PLATFORM=android-24 \
+                -DANDROID_STL=c++_static \
+                -DOPENSSL_ROOT_DIR=$GITHUB_WORKSPACE/openssl_arm64 \
+                -DOPENSSL_CRYPTO_LIBRARY=$GITHUB_WORKSPACE/openssl_arm64/lib/libcrypto.a \
+                -DOPENSSL_SSL_LIBRARY=$GITHUB_WORKSPACE/openssl_arm64/lib/libssl.a \
+                -DOPENSSL_INCLUDE_DIR=$GITHUB_WORKSPACE/openssl_arm64/include \
+                -DTD_ENABLE_JNI=ON \
+                -GNinja ..
+
+          echo "Compiling tdjni (RAM Safety: -j 2)..."
+          ninja -j 2 tdjni
+
+          echo "Copying compiled .so and Java SDK to target directories..."
+          find . -name "libtdjni.so" -exec cp {} $GITHUB_WORKSPACE/jniLibs/arm64-v8a/ \;
+          find . -name "TdApi.java" -exec cp {} $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/ \;
+          cp ../example/android/src/org/drinkless/td/libcore/telegram/Client.java $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/
+          cd ../..
+
+      - name: 3. Verify Compiled Files
+        run: |
+          echo "=== Compilation Summary ==="
+          ls -lh jniLibs/arm64-v8a/
+          ls -lh java/org/drinkless/td/libcore/telegram/
+          
+          SO_SIZE=$(stat -c%s "jniLibs/arm64-v8a/libtdjni.so" 2>/dev/null || echo 0)
+          if [ "$SO_SIZE" -lt 10000000 ]; then
+              echo "Error: libtdjni.so compilation failed or file too small."
+              exit 1
+          fi
+
+      - name: 4. Commit and Push Pure Binaries to Repo
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add jniLibs/
+          git add java/
+          git commit -m "Add natively compiled TDLib 64-bit binary and Java bindings from official source" || echo "No changes"
+          git push
