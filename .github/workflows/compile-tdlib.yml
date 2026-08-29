@@ -23,9 +23,8 @@ jobs:
 
       - name: Safe Swap Space Configuration (RAM Protection)
         run: |
-          # मौजूदा स्वैप बंद करके /mnt (30GB+ फ्री स्पेस) पर नया 6GB स्वैप बनाएं
           sudo swapoff -a || true
-          sudo rm -f /swapfile || true
+          sudo rm -f /mnt/swapfile || true
           sudo fallocate -l 6G /mnt/swapfile
           sudo chmod 600 /mnt/swapfile
           sudo mkswap /mnt/swapfile
@@ -67,10 +66,12 @@ jobs:
               cp -rf $GITHUB_WORKSPACE/openssl_arm64/lib64/* $GITHUB_WORKSPACE/openssl_arm64/lib/ 2>/dev/null || true
           fi
 
-      - name: 2. Clone and Compile TDLib (JNI Engine)
+      - name: 2. Clone and Compile TDLib Android JNI (example/android)
         run: |
           git clone https://github.com/tdlib/td.git
-          cd td
+          
+          # Android JNI बिल्ड डायरेक्टरी में जाएं
+          cd td/example/android
           mkdir build && cd build
 
           cmake -DCMAKE_BUILD_TYPE=Release \
@@ -83,21 +84,16 @@ jobs:
                 -DOPENSSL_CRYPTO_LIBRARY=$GITHUB_WORKSPACE/openssl_arm64/lib/libcrypto.a \
                 -DOPENSSL_SSL_LIBRARY=$GITHUB_WORKSPACE/openssl_arm64/lib/libssl.a \
                 -DOPENSSL_USE_STATIC_LIBS=TRUE \
-                -DTD_ENABLE_JNI=ON \
-                -DJNI_FOUND=TRUE \
-                -DJNI_INCLUDE_DIRS="$JAVA_HOME/include;$JAVA_HOME/include/linux" \
-                -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
-                -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
                 -GNinja ..
 
-          # कंपाइल शुरू (RAM सेफ: 2 थ्रेड्स)
+          # असली C++ इंजन कंपाइलेशन (RAM-Safe Mode: 2 Threads)
           ninja -j 2 tdjni
 
-          # तैयार फाइल्स को प्रोजेक्ट फोल्डर में डालें
-          find . -name "libtdjni.so" -exec cp {} $GITHUB_WORKSPACE/jniLibs/arm64-v8a/ \;
-          find . -name "TdApi.java" -exec cp {} $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/ \;
-          cp ../example/android/src/org/drinkless/td/libcore/telegram/Client.java $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/
-          cd ../..
+          # तैयार फाइल्स को प्रोजेक्ट फोल्डर्स में कॉपी करें
+          find $GITHUB_WORKSPACE/td -name "libtdjni.so" -exec cp {} $GITHUB_WORKSPACE/jniLibs/arm64-v8a/ \;
+          find $GITHUB_WORKSPACE/td -name "TdApi.java" -exec cp {} $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/ \;
+          cp $GITHUB_WORKSPACE/td/example/android/src/org/drinkless/td/libcore/telegram/Client.java $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/
+          cd ../../../..
 
       - name: 3. Verify Compiled Files
         run: |
