@@ -21,15 +21,18 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Create 4GB Swap Space (RAM Safety)
+      - name: Safe Swap Space Configuration (RAM Protection)
         run: |
-          sudo fallocate -l 4G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          # मौजूदा स्वैप बंद करके /mnt (30GB+ फ्री स्पेस) पर नया 6GB स्वैप बनाएं
+          sudo swapoff -a || true
+          sudo rm -f /swapfile || true
+          sudo fallocate -l 6G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
           free -h
 
-      - name: Install Build Tools & Dependencies
+      - name: Install Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y make git zlib1g-dev gperf cmake clang libc++-dev libc++abi-dev php-cli ninja-build
@@ -87,10 +90,10 @@ jobs:
                 -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
                 -GNinja ..
 
-          # असली C++ कंपाइलेशन शुरू (लगभग 40-50 मिनट)
+          # कंपाइल शुरू (RAM सेफ: 2 थ्रेड्स)
           ninja -j 2 tdjni
 
-          # तैयार बाइनरी और जावा फाइल्स कॉपी करें
+          # तैयार फाइल्स को प्रोजेक्ट फोल्डर में डालें
           find . -name "libtdjni.so" -exec cp {} $GITHUB_WORKSPACE/jniLibs/arm64-v8a/ \;
           find . -name "TdApi.java" -exec cp {} $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/ \;
           cp ../example/android/src/org/drinkless/td/libcore/telegram/Client.java $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/
@@ -98,13 +101,13 @@ jobs:
 
       - name: 3. Verify Compiled Files
         run: |
-          echo "=== Compilation Summary ==="
+          echo "=== Compilation Verification ==="
           ls -lh jniLibs/arm64-v8a/
           ls -lh java/org/drinkless/td/libcore/telegram/
           
           SO_SIZE=$(stat -c%s "jniLibs/arm64-v8a/libtdjni.so" 2>/dev/null || echo 0)
           if [ "$SO_SIZE" -lt 10000000 ]; then
-              echo "Error: libtdjni.so compilation failed or file too small."
+              echo "Error: libtdjni.so compilation failed or file missing."
               exit 1
           fi
 
