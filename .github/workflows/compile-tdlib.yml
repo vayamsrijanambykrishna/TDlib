@@ -66,12 +66,10 @@ jobs:
               cp -rf $GITHUB_WORKSPACE/openssl_arm64/lib64/* $GITHUB_WORKSPACE/openssl_arm64/lib/ 2>/dev/null || true
           fi
 
-      - name: 2. Generate TDLib JNI Source Files (Host Step with JNI Enabled)
+      - name: 2. Generate TDLib JNI Source Files (Host Step)
         run: |
           git clone https://github.com/tdlib/td.git
           cd td
-          
-          # JNI फ्लैग के साथ होस्ट पर ऑटो-जेनरेटेड JNI कोड बनाएं
           mkdir build_host && cd build_host
           cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON -GNinja ..
           ninja prepare_cross_compiling
@@ -95,18 +93,17 @@ jobs:
                 -DTD_ENABLE_JNI=ON \
                 -GNinja ..
 
-          # मुख्य कंपाइलेशन और फाइनल .so लिंकिंग
           ninja -j 2 tdjni
 
-          # तैयार फाइल्स को प्रोजेक्ट फोल्डर्स में कॉपी करें
+          # तैयार बाइनरी और जावा फाइल्स को सुरक्षित रूप से कॉपी करें
           find $GITHUB_WORKSPACE/td -name "libtdjni.so" -exec cp {} $GITHUB_WORKSPACE/jniLibs/arm64-v8a/ \;
           find $GITHUB_WORKSPACE/td -name "TdApi.java" -exec cp {} $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/ \;
-          cp $GITHUB_WORKSPACE/td/example/android/src/org/drinkless/td/libcore/telegram/Client.java $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/
+          find $GITHUB_WORKSPACE/td -name "Client.java" -exec cp {} $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/ \;
           cd ../../../..
 
       - name: 4. Verify Compiled Files
         run: |
-          echo "=== Compilation Verification ==="
+          echo "=== Final Build Artifacts ==="
           ls -lh jniLibs/arm64-v8a/
           ls -lh java/org/drinkless/td/libcore/telegram/
           
