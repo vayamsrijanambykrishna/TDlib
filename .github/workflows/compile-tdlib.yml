@@ -25,40 +25,40 @@ jobs:
           mkdir -p jniLibs/arm64-v8a
           mkdir -p java/org/drinkless/td/libcore/telegram
 
-      - name: 1. Clone and Compile OpenSSL 3 for Android Clang (ARM64)
+      - name: 1. Clone and Compile OpenSSL 3 (ARM64)
         run: |
-          echo "Cloning OpenSSL 3.x (Modern Clang supported)..."
           git clone --depth 1 --branch openssl-3.1.5 https://github.com/openssl/openssl.git
           cd openssl
           
           export ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME
           export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
           
-          echo "Configuring OpenSSL for android-arm64 with Clang..."
           ./Configure android-arm64 \
                       -D__ANDROID_API__=24 \
                       no-shared \
                       no-tests \
                       no-unit-test \
-                      --prefix=$GITHUB_WORKSPACE/openssl_arm64
+                      --prefix=$GITHUB_WORKSPACE/openssl_arm64 \
+                      --openssldir=$GITHUB_WORKSPACE/openssl_arm64
                       
           make -j2
           make install_sw
           cd ..
           
-          # Fix lib64 symlink if created
+          # दोनों lib और lib64 फोल्डर्स में फाइल्स सुनिश्चित करें
+          mkdir -p $GITHUB_WORKSPACE/openssl_arm64/lib
           if [ -d "$GITHUB_WORKSPACE/openssl_arm64/lib64" ]; then
-              cp -r $GITHUB_WORKSPACE/openssl_arm64/lib64/* $GITHUB_WORKSPACE/openssl_arm64/lib/ 2>/dev/null || true
+              cp -rf $GITHUB_WORKSPACE/openssl_arm64/lib64/* $GITHUB_WORKSPACE/openssl_arm64/lib/ 2>/dev/null || true
           fi
+          
+          ls -la $GITHUB_WORKSPACE/openssl_arm64/lib/
 
       - name: 2. Clone and Compile TDLib (JNI Engine)
         run: |
-          echo "Cloning official Telegram TDLib..."
           git clone https://github.com/tdlib/td.git
           cd td
           mkdir build && cd build
 
-          echo "Configuring CMake with Android NDK Toolchain..."
           cmake -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
                 -DANDROID_ABI=arm64-v8a \
@@ -66,13 +66,16 @@ jobs:
                 -DANDROID_STL=c++_static \
                 -DOPENSSL_ROOT_DIR=$GITHUB_WORKSPACE/openssl_arm64 \
                 -DOPENSSL_INCLUDE_DIR=$GITHUB_WORKSPACE/openssl_arm64/include \
+                -DOPENSSL_CRYPTO_LIBRARY=$GITHUB_WORKSPACE/openssl_arm64/lib/libcrypto.a \
+                -DOPENSSL_SSL_LIBRARY=$GITHUB_WORKSPACE/openssl_arm64/lib/libssl.a \
+                -DOPENSSL_USE_STATIC_LIBS=TRUE \
                 -DTD_ENABLE_JNI=ON \
                 -GNinja ..
 
-          echo "Compiling tdjni (RAM Safe Mode: -j 2)..."
+          # RAM सेफ मोड में असली C++ कंपाइलेशन
           ninja -j 2 tdjni
 
-          echo "Copying compiled .so and Java SDK to target directories..."
+          # तैयार फाइल्स को प्रोजेक्ट फोल्डर में कॉपी करें
           find . -name "libtdjni.so" -exec cp {} $GITHUB_WORKSPACE/jniLibs/arm64-v8a/ \;
           find . -name "TdApi.java" -exec cp {} $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/ \;
           cp ../example/android/src/org/drinkless/td/libcore/telegram/Client.java $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/
