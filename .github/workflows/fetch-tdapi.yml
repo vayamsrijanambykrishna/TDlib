@@ -13,34 +13,42 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Snatch TdApi.java from Official Build (~20 seconds)
+      - name: Root Snatch Method (The Ultimate Fix)
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli
           
+          TARGET_DIR="$GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram"
+          mkdir -p "$TARGET_DIR"
+          
           # 1. Clone Official TDLib
+          cd $GITHUB_WORKSPACE
           git clone --depth 1 https://github.com/tdlib/td.git
-          cd td/example/java
+          cd td
           mkdir build && cd build
           
-          # 2. Configure Official Java Example
-          cmake -DCMAKE_BUILD_TYPE=Release ..
+          # 2. Configure Root TDLib (This ALWAYS works)
+          cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON ..
           
-          # 3. Start Official Build in Background
-          echo "Starting official build process in background..."
+          # 3. Start standard build in the background
+          echo "Starting C++ build in background to generate TdApi.java..."
           make -j2 &
           BUILD_PID=$!
           
-          # 4. Monitor and Snatch the File!
-          echo "Monitoring for TdApi.java generation..."
-          mkdir -p java/org/drinkless/tdlib
-          
+          # 4. Watch for the file and Snatch it!
+          echo "Monitoring for TdApi.java..."
           SUCCESS=0
-          for i in {1..60}; do
-              if [ -f "java/org/drinkless/tdlib/TdApi.java" ]; then
-                  SIZE=$(stat -c%s "java/org/drinkless/tdlib/TdApi.java" 2>/dev/null || echo 0)
+          
+          # 90 बार (लगभग 3 मिनट तक) हर 2 सेकंड में चेक करेगा
+          for i in {1..90}; do
+              TDAPI_FILE=$(find $GITHUB_WORKSPACE/td -name "TdApi.java" | head -n 1)
+              
+              if [ -n "$TDAPI_FILE" ] && [ -f "$TDAPI_FILE" ]; then
+                  SIZE=$(stat -c%s "$TDAPI_FILE" 2>/dev/null || echo 0)
+                  # TdApi.java असली होगी तो उसका साइज़ 500KB से ज्यादा होगा
                   if [ "$SIZE" -gt 500000 ]; then
-                      echo "✅ TdApi.java successfully generated! Size: $SIZE bytes"
+                      echo "✅ TdApi.java successfully generated and snatched! Size: $SIZE bytes"
+                      cp "$TDAPI_FILE" "$TARGET_DIR/TdApi.java"
                       SUCCESS=1
                       break
                   fi
@@ -48,8 +56,8 @@ jobs:
               sleep 2
           done
           
-          # 5. Kill the compiler so we don't waste 40 minutes!
-          echo "Stopping the C++ compiler..."
+          # 5. Kill the compiler so workflow doesn't run for 40 mins
+          echo "Stopping the background C++ compiler..."
           kill -9 $BUILD_PID || true
           
           if [ "$SUCCESS" -eq 0 ]; then
@@ -57,33 +65,19 @@ jobs:
               exit 1
           fi
           
-          # 6. Copy to your app's directory
-          TARGET_DIR="$GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram"
-          mkdir -p "$TARGET_DIR"
-          cp java/org/drinkless/tdlib/TdApi.java "$TARGET_DIR/TdApi.java"
-          
-          # 7. Match the package name
+          # 6. Change the package name to match your app
           sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' "$TARGET_DIR/TdApi.java"
 
-      - name: Verify Stolen File
+      - name: Final Verification
         run: |
-          echo "=== Final Verification ==="
+          echo "=== Verification ==="
           ls -lh java/org/drinkless/td/libcore/telegram/
-          
-          FILE_SIZE=$(stat -c%s "java/org/drinkless/td/libcore/telegram/TdApi.java" 2>/dev/null || echo 0)
-          echo "TdApi.java Size: $FILE_SIZE bytes"
-          
-          if [ "$FILE_SIZE" -lt 500000 ]; then
-              echo "❌ Final check failed!"
-              exit 1
-          fi
-          
-          head -n 5 java/org/drinkless/td/libcore/telegram/TdApi.java
+          head -n 10 java/org/drinkless/td/libcore/telegram/TdApi.java
 
       - name: Commit TdApi.java to Repo
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add java/org/drinkless/td/libcore/telegram/TdApi.java
-          git commit -m "Add official TdApi.java (Snatched successfully)" || echo "No changes"
+          git commit -m "Add official TdApi.java via Root Snatch method" || echo "No changes"
           git push
