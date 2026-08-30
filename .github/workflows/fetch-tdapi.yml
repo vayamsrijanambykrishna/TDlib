@@ -1,0 +1,53 @@
+name: Fetch and Add TdApi.java
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  get-tdapi:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Target Directory
+        run: |
+          mkdir -p java/org/drinkless/td/libcore/telegram
+
+      - name: Generate Official TdApi.java (Takes ~30 seconds)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gperf php-cli ninja-build
+
+          # Clone TDLib
+          git clone --depth 1 https://github.com/tdlib/td.git
+          cd td
+          mkdir build && cd build
+
+          # Quick generator build (No C++ engine compile, only Java API generation)
+          cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON -GNinja ..
+          ninja td_generate_java_api || ninja prepare_cross_compiling
+
+          # Locate and copy TdApi.java
+          find . -name "TdApi.java" -exec cp {} $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java \;
+          cd ../..
+
+          # Package check
+          sed -i '1s/.*/package org.drinkless.td.libcore.telegram;/' java/org/drinkless/td/libcore/telegram/TdApi.java || true
+
+      - name: Verify File
+        run: |
+          echo "=== Verification ==="
+          ls -lh java/org/drinkless/td/libcore/telegram/
+          head -n 10 java/org/drinkless/td/libcore/telegram/TdApi.java
+
+      - name: Commit TdApi.java to Repo
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add java/org/drinkless/td/libcore/telegram/TdApi.java
+          git commit -m "Add official generated TdApi.java" || echo "No changes"
+          git push
