@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 jobs:
-  download-tdapi:
+  get-tdapi:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -17,36 +17,68 @@ jobs:
         run: |
           mkdir -p java/org/drinkless/td/libcore/telegram
 
-      - name: Direct Download Pre-generated TdApi.java (~3 seconds)
+      - name: Generate Official TdApi.java (~15 seconds)
         run: |
-          # आधिकारिक प्री-जेनरेटेड TdApi.java को सीधे डाउनलोड करें
-          curl -f -sL "https://raw.githubusercontent.com/DrKLO/Telegram/master/TMessagesProj/src/main/java/org/drinkless/td/libcore/telegram/TdApi.java" \
-               -o java/org/drinkless/td/libcore/telegram/TdApi.java || \
-          curl -f -sL "https://raw.githubusercontent.com/grishka/Near/master/app/src/main/java/org/drinkless/td/libcore/telegram/TdApi.java" \
-               -o java/org/drinkless/td/libcore/telegram/TdApi.java
+          sudo apt-get update
+          sudo apt-get install -y cmake gperf php-cli ninja-build
 
-          # पैकेज नाम सुनिश्चित करें
+          # 1. Clone TDLib source
+          git clone --depth 1 https://github.com/tdlib/td.git
+          cd td
+          mkdir build && cd build
+
+          # 2. Build generator tool binary
+          cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON -GNinja ..
+          ninja td_generate_java_api
+
+          # 3. Locate exact scheme location & generator binary
+          TL_FILE=$(find $GITHUB_WORKSPACE/td -name "td_api.tl" -type f | head -n 1)
+          GEN_DIR=$(dirname $(dirname "$TL_FILE"))
+          GEN_BIN=$(find $GITHUB_WORKSPACE/td/build -name "td_generate_java_api" -type f -executable | head -n 1)
+
+          echo "Scheme Root Directory: $GEN_DIR"
+          echo "Generator Binary: $GEN_BIN"
+
+          # 4. Create all required sub-directories inside the scheme root
+          cd "$GEN_DIR"
+          mkdir -p auto/tlo/org/drinkless/tdlib
+          mkdir -p auto/tlo/org/drinkless/td/libcore/telegram
+          mkdir -p auto/org/drinkless/tdlib
+          mkdir -p auto/org/drinkless/td/libcore/telegram
+          mkdir -p auto/td/telegram
+
+          # 5. Run the official generator binary
+          "$GEN_BIN"
+
+          # 6. Locate generated TdApi.java and copy to repo
+          cd $GITHUB_WORKSPACE
+          GENERATED_FILE=$(find $GITHUB_WORKSPACE/td -name "TdApi.java" | head -n 1)
+          echo "Generated File: $GENERATED_FILE"
+
+          cp "$GENERATED_FILE" java/org/drinkless/td/libcore/telegram/TdApi.java
+
+          # 7. Normalize package declaration to match Client.java
           sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' java/org/drinkless/td/libcore/telegram/TdApi.java
 
-      - name: Verify Downloaded File
+      - name: Verify Generated TdApi.java
         run: |
-          echo "=== File Details ==="
-          ls -lh java/org/drinkless/td/libcore/telegram/TdApi.java
+          echo "=== File Verification ==="
+          ls -lh java/org/drinkless/td/libcore/telegram/
           
           FILE_SIZE=$(stat -c%s "java/org/drinkless/td/libcore/telegram/TdApi.java" 2>/dev/null || echo 0)
-          echo "File size: $FILE_SIZE bytes"
+          echo "TdApi.java Size: $FILE_SIZE bytes"
           
           if [ "$FILE_SIZE" -lt 500000 ]; then
-              echo "Error: Download failed or file too small!"
+              echo "Error: TdApi.java file missing or empty!"
               exit 1
           fi
-
-          head -n 10 java/org/drinkless/td/libcore/telegram/TdApi.java
+          
+          head -n 5 java/org/drinkless/td/libcore/telegram/TdApi.java
 
       - name: Commit TdApi.java to Repo
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add java/org/drinkless/td/libcore/telegram/TdApi.java
-          git commit -m "Add pre-generated official TdApi.java" || echo "No changes"
+          git commit -m "Add official generated TdApi.java" || echo "No changes"
           git push
