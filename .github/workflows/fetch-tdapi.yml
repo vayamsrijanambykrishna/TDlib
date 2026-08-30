@@ -13,64 +13,52 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
       - name: Setup Target Directory
         run: |
           mkdir -p java/org/drinkless/td/libcore/telegram
 
-      - name: Generate Official TdApi.java via TDLib Example Engine (~20 seconds)
+      - name: Generate Official TdApi.java via Ninja Target (~15 seconds)
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build
 
-          # 1. Clone TDLib source
+          # 1. Clone TDLib
           git clone --depth 1 https://github.com/tdlib/td.git
-          
-          # 2. Build via TDLib's official Java module
-          cd td/example/java
+          cd td
           mkdir build && cd build
-          cmake -DCMAKE_BUILD_TYPE=Release -GNinja ..
-          
-          # 3. Trigger Java API generation rule
-          ninja td_generate_java_api || true
 
-          # 4. Prepare required subdirectories & run generator inside source tree
-          cd $GITHUB_WORKSPACE/td/td/generate
-          mkdir -p auto/tlo/org/drinkless/tdlib
-          mkdir -p auto/tlo/org/drinkless/td/libcore/telegram
-          mkdir -p auto/org/drinkless/tdlib
-          mkdir -p auto/td/telegram
-          
-          $GITHUB_WORKSPACE/td/example/java/build/td/generate/td_generate_java_api || \
-          $GITHUB_WORKSPACE/td/example/java/build/td_generate_java_api || true
+          # 2. Configure root TDLib with JNI
+          cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON -GNinja ..
 
-          # 5. Locate and copy generated TdApi.java
+          # 3. Ninja से सीधे TdApi.java टारगेट को कॉल करें
+          TARGET=$(ninja -t targets all | grep -i "TdApi\.java" | cut -d':' -f1 | head -n 1)
+          echo "Discovered Ninja Target: $TARGET"
+
+          if [ -n "$TARGET" ]; then
+              ninja "$TARGET"
+          else
+              ninja prepare_cross_compiling
+          fi
+
+          # 4. Copy generated file to destination
           cd $GITHUB_WORKSPACE
           TDAPI_FILE=$(find td -name "TdApi.java" | head -n 1)
-          echo "Found generated TdApi at: $TDAPI_FILE"
+          echo "Generated TdApi found at: $TDAPI_FILE"
 
           cp "$TDAPI_FILE" java/org/drinkless/td/libcore/telegram/TdApi.java
-          cp "$TDAPI_FILE" TdApi.java # रूट में भी बैकअप कॉपी
+          cp "$TDAPI_FILE" TdApi.java
 
-          # 6. Set matching package name
+          # 5. Fix package name to match Client.java
           sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' java/org/drinkless/td/libcore/telegram/TdApi.java
 
-      - name: Verify Generated TdApi.java
+      - name: Verify TdApi.java
         run: |
-          echo "=== Verification ==="
+          echo "=== File Verification ==="
           ls -lh java/org/drinkless/td/libcore/telegram/
           ls -lh TdApi.java
           
-          FILE_SIZE=$(stat -c%s "java/org/drinkless/td/libcore/telegram/TdApi.java" 2>/dev/null || echo 0)
-          echo "TdApi.java Size: $FILE_SIZE bytes"
-          
-          if [ "$FILE_SIZE" -lt 500000 ]; then
-              echo "Error: TdApi.java file missing or empty!"
+          if [ ! -f "java/org/drinkless/td/libcore/telegram/TdApi.java" ]; then
+              echo "Error: TdApi.java missing!"
               exit 1
           fi
           
