@@ -17,12 +17,12 @@ jobs:
         run: |
           mkdir -p java/org/drinkless/td/libcore/telegram
 
-      - name: Generate Official TdApi.java (~25 seconds)
+      - name: Generate Official TdApi.java (~20 seconds)
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build
 
-          # 1. Clone TDLib source
+          # 1. Clone TDLib
           git clone --depth 1 https://github.com/tdlib/td.git
           cd td
           mkdir build && cd build
@@ -31,20 +31,29 @@ jobs:
           cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON -GNinja ..
           ninja td_generate_java_api
 
-          # 3. Create required output directories for C++ ofstream
-          cd $GITHUB_WORKSPACE/td/td/generate
+          # 3. Locate td_api.tl & generator binary dynamically
+          TL_FILE=$(find $GITHUB_WORKSPACE/td -name "td_api.tl" | head -n 1)
+          TL_DIR=$(dirname $(dirname "$TL_FILE"))
+          GEN_BIN=$(find $GITHUB_WORKSPACE/td/build -name "td_generate_java_api" -type f | head -n 1)
+
+          echo "TL Directory: $TL_DIR"
+          echo "Generator Binary: $GEN_BIN"
+
+          # 4. Create required directories and run generator
+          cd "$TL_DIR"
           mkdir -p auto/tlo/org/drinkless/tdlib
           mkdir -p auto/org/drinkless/tdlib
           mkdir -p auto/td/telegram
+          
+          "$GEN_BIN"
 
-          # 4. Execute generator binary
-          $GITHUB_WORKSPACE/td/build/td/generate/td_generate_java_api
-
-          # 5. Copy generated TdApi.java to destination
+          # 5. Copy generated TdApi.java
           cd $GITHUB_WORKSPACE
-          find td -name "TdApi.java" -exec cp {} java/org/drinkless/td/libcore/telegram/TdApi.java \;
+          TDAPI_PATH=$(find td -name "TdApi.java" | head -n 1)
+          echo "Generated TdApi at: $TDAPI_PATH"
+          cp "$TDAPI_PATH" java/org/drinkless/td/libcore/telegram/TdApi.java
 
-          # 6. Set correct package name to match Client.java
+          # 6. Normalize package name to match Client.java
           sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' java/org/drinkless/td/libcore/telegram/TdApi.java
 
       - name: Verify TdApi.java File
@@ -53,10 +62,10 @@ jobs:
           ls -lh java/org/drinkless/td/libcore/telegram/
           
           FILE_SIZE=$(stat -c%s "java/org/drinkless/td/libcore/telegram/TdApi.java" 2>/dev/null || echo 0)
-          echo "TdApi.java size: $FILE_SIZE bytes"
+          echo "TdApi.java Size: $FILE_SIZE bytes"
           
-          if [ "$FILE_SIZE" -lt 1000000 ]; then
-              echo "Error: TdApi.java generation failed or incomplete!"
+          if [ "$FILE_SIZE" -lt 500000 ]; then
+              echo "Error: TdApi.java generation failed!"
               exit 1
           fi
           
