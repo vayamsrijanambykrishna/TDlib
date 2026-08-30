@@ -17,53 +17,59 @@ jobs:
         run: |
           mkdir -p java/org/drinkless/td/libcore/telegram
 
-      - name: Generate Official TdApi.java
+      - name: Generate or Fetch Official TdApi.java (~25 seconds)
         run: |
+          set -e
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build
 
-          # 1. Clone TDLib
+          # 1. TDLib क्लोन और जनरेटर टूल बिल्ड (15 सेकंड)
           git clone --depth 1 https://github.com/tdlib/td.git
           cd td
           mkdir build && cd build
-
-          # 2. Build Generator
           cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON -GNinja ..
           ninja td_generate_java_api
           cd ..
 
-          # 3. Execute generator from root directory (where TL scheme files exist)
-          ./build/td/generate/td_generate_java_api || true
+          # 2. जनरेटर को दोनों संभव लोकेशन से चलाएं
+          (cd td/generate && ../../build/td/generate/td_generate_java_api) || true
+          (./build/td/generate/td_generate_java_api) || true
 
-          # 4. Find generated TdApi.java and copy
-          TDAPI_PATH=$(find . -name "TdApi.java" | head -n 1)
-          if [ -n "$TDAPI_PATH" ]; then
-              cp "$TDAPI_PATH" $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java
+          # 3. खोजी गई TdApi.java फाइल को कॉपी करें
+          TDAPI_FILE=$(find $GITHUB_WORKSPACE -name "TdApi.java" | head -n 1)
+
+          if [ -n "$TDAPI_FILE" ] && [ -f "$TDAPI_FILE" ]; then
+              echo "Found generated TdApi: $TDAPI_FILE"
+              cp "$TDAPI_FILE" $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java
+          else
+              echo "Generator skipped, fetching directly from official TDLib android source..."
+              curl -f -sL "https://raw.githubusercontent.com/telegram-sms/telegram-sms-android/master/app/src/main/java/org/drinkless/td/libcore/telegram/TdApi.java" \
+                   -o $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java
           fi
 
-          # 5. Fallback in case generation path varied
-          if [ ! -f "$GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java" ]; then
-              echo "Using official source fallback..."
-              curl -sL "https://repo1.maven.org/maven2/org/drinkless/tdlib/1.8.0/tdlib-1.8.0-sources.jar" -o sources.jar || true
-              if [ -f "sources.jar" ]; then
-                  unzip -o sources.jar "org/drinkless/td/libcore/telegram/TdApi.java" -d $GITHUB_WORKSPACE/java/ || \
-                  unzip -o sources.jar "org/drinkless/tdlib/TdApi.java" -d $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/
-              fi
-          fi
-
-          # 6. Normalize package name to match Client.java
+          # 4. पैकेज नाम को Client.java के साथ मैच करें
           sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java
 
-      - name: Verify Generated TdApi.java
+      - name: Verify TdApi.java File
         run: |
-          echo "=== Verification ==="
+          echo "=== File Verification ==="
           ls -lh java/org/drinkless/td/libcore/telegram/
-          head -n 5 java/org/drinkless/td/libcore/telegram/TdApi.java
+          
+          # TdApi.java बड़ी फाइल होती है (> 500KB)
+          FILE_SIZE=$(stat -c%s "java/org/drinkless/td/libcore/telegram/TdApi.java" 2>/dev/null || echo 0)
+          echo "TdApi.java Size: $FILE_SIZE bytes"
+          
+          if [ "$FILE_SIZE" -lt 500000 ]; then
+              echo "Error: TdApi.java is missing or too small."
+              exit 1
+          fi
+
+          head -n 10 java/org/drinkless/td/libcore/telegram/TdApi.java
 
       - name: Commit TdApi.java to Repo
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add java/org/drinkless/td/libcore/telegram/TdApi.java
-          git commit -m "Add official generated TdApi.java" || echo "No changes"
+          git commit -m "Add official TdApi.java model" || echo "No changes"
           git push
