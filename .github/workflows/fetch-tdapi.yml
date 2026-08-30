@@ -17,7 +17,7 @@ jobs:
         run: |
           mkdir -p java/org/drinkless/td/libcore/telegram
 
-      - name: Generate Official TdApi.java
+      - name: Generate Official TdApi.java (~25 seconds)
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build
@@ -27,28 +27,36 @@ jobs:
           cd td
           mkdir build && cd build
 
-          # 2. Build generator tool (10-15s)
+          # 2. Build generator tool (takes ~10s)
           cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON -GNinja ..
           ninja td_generate_java_api
 
-          # 3. Execute generator from the scheme directory
+          # 3. Create required output directories for C++ ofstream
           cd $GITHUB_WORKSPACE/td/td/generate
+          mkdir -p auto/tlo/org/drinkless/tdlib
+          mkdir -p auto/org/drinkless/tdlib
+          mkdir -p auto/td/telegram
+
+          # 4. Execute generator binary
           $GITHUB_WORKSPACE/td/build/td/generate/td_generate_java_api
 
-          # 4. Locate and copy the generated TdApi.java
+          # 5. Copy generated TdApi.java to destination
           cd $GITHUB_WORKSPACE
           find td -name "TdApi.java" -exec cp {} java/org/drinkless/td/libcore/telegram/TdApi.java \;
 
-          # 5. Fix package declaration for Android
+          # 6. Set correct package name to match Client.java
           sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' java/org/drinkless/td/libcore/telegram/TdApi.java
 
-      - name: Verify Generated TdApi.java
+      - name: Verify TdApi.java File
         run: |
           echo "=== Verification ==="
           ls -lh java/org/drinkless/td/libcore/telegram/
           
-          if [ ! -f "java/org/drinkless/td/libcore/telegram/TdApi.java" ]; then
-              echo "Error: TdApi.java was not generated!"
+          FILE_SIZE=$(stat -c%s "java/org/drinkless/td/libcore/telegram/TdApi.java" 2>/dev/null || echo 0)
+          echo "TdApi.java size: $FILE_SIZE bytes"
+          
+          if [ "$FILE_SIZE" -lt 1000000 ]; then
+              echo "Error: TdApi.java generation failed or incomplete!"
               exit 1
           fi
           
