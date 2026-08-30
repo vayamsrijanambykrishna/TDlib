@@ -17,53 +17,41 @@ jobs:
         run: |
           mkdir -p java/org/drinkless/td/libcore/telegram
 
-      - name: Generate or Fetch Official TdApi.java (~25 seconds)
+      - name: Generate Official TdApi.java
         run: |
-          set -e
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build
 
-          # 1. TDLib क्लोन और जनरेटर टूल बिल्ड (15 सेकंड)
+          # 1. Clone TDLib source
           git clone --depth 1 https://github.com/tdlib/td.git
           cd td
           mkdir build && cd build
+
+          # 2. Build generator tool (10-15s)
           cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON -GNinja ..
           ninja td_generate_java_api
-          cd ..
 
-          # 2. जनरेटर को दोनों संभव लोकेशन से चलाएं
-          (cd td/generate && ../../build/td/generate/td_generate_java_api) || true
-          (./build/td/generate/td_generate_java_api) || true
+          # 3. Execute generator from the scheme directory
+          cd $GITHUB_WORKSPACE/td/td/generate
+          $GITHUB_WORKSPACE/td/build/td/generate/td_generate_java_api
 
-          # 3. खोजी गई TdApi.java फाइल को कॉपी करें
-          TDAPI_FILE=$(find $GITHUB_WORKSPACE -name "TdApi.java" | head -n 1)
+          # 4. Locate and copy the generated TdApi.java
+          cd $GITHUB_WORKSPACE
+          find td -name "TdApi.java" -exec cp {} java/org/drinkless/td/libcore/telegram/TdApi.java \;
 
-          if [ -n "$TDAPI_FILE" ] && [ -f "$TDAPI_FILE" ]; then
-              echo "Found generated TdApi: $TDAPI_FILE"
-              cp "$TDAPI_FILE" $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java
-          else
-              echo "Generator skipped, fetching directly from official TDLib android source..."
-              curl -f -sL "https://raw.githubusercontent.com/telegram-sms/telegram-sms-android/master/app/src/main/java/org/drinkless/td/libcore/telegram/TdApi.java" \
-                   -o $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java
-          fi
+          # 5. Fix package declaration for Android
+          sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' java/org/drinkless/td/libcore/telegram/TdApi.java
 
-          # 4. पैकेज नाम को Client.java के साथ मैच करें
-          sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java
-
-      - name: Verify TdApi.java File
+      - name: Verify Generated TdApi.java
         run: |
-          echo "=== File Verification ==="
+          echo "=== Verification ==="
           ls -lh java/org/drinkless/td/libcore/telegram/
           
-          # TdApi.java बड़ी फाइल होती है (> 500KB)
-          FILE_SIZE=$(stat -c%s "java/org/drinkless/td/libcore/telegram/TdApi.java" 2>/dev/null || echo 0)
-          echo "TdApi.java Size: $FILE_SIZE bytes"
-          
-          if [ "$FILE_SIZE" -lt 500000 ]; then
-              echo "Error: TdApi.java is missing or too small."
+          if [ ! -f "java/org/drinkless/td/libcore/telegram/TdApi.java" ]; then
+              echo "Error: TdApi.java was not generated!"
               exit 1
           fi
-
+          
           head -n 10 java/org/drinkless/td/libcore/telegram/TdApi.java
 
       - name: Commit TdApi.java to Repo
@@ -71,5 +59,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add java/org/drinkless/td/libcore/telegram/TdApi.java
-          git commit -m "Add official TdApi.java model" || echo "No changes"
+          git commit -m "Add official generated TdApi.java" || echo "No changes"
           git push
