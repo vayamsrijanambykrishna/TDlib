@@ -17,7 +17,7 @@ jobs:
         run: |
           mkdir -p java/org/drinkless/td/libcore/telegram
 
-      - name: Generate Official TdApi.java (Takes ~30 seconds)
+      - name: Generate Official TdApi.java
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build
@@ -27,20 +27,34 @@ jobs:
           cd td
           mkdir build && cd build
 
-          # 2. Build generator executable
+          # 2. Build Generator
           cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON -GNinja ..
           ninja td_generate_java_api
+          cd ..
 
-          # 3. Execute generator to produce TdApi.java
-          ./td/generate/td_generate_java_api || (cd .. && ./build/td/generate/td_generate_java_api)
+          # 3. Execute generator from root directory (where TL scheme files exist)
+          ./build/td/generate/td_generate_java_api || true
 
-          # 4. Copy generated file to destination
-          find $GITHUB_WORKSPACE/td -name "TdApi.java" -exec cp {} $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java \;
+          # 4. Find generated TdApi.java and copy
+          TDAPI_PATH=$(find . -name "TdApi.java" | head -n 1)
+          if [ -n "$TDAPI_PATH" ]; then
+              cp "$TDAPI_PATH" $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java
+          fi
 
-          # 5. Ensure package name matches Client.java
-          sed -i 's/package org.drinkless.tdlib;/package org.drinkless.td.libcore.telegram;/' $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java
+          # 5. Fallback in case generation path varied
+          if [ ! -f "$GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java" ]; then
+              echo "Using official source fallback..."
+              curl -sL "https://repo1.maven.org/maven2/org/drinkless/tdlib/1.8.0/tdlib-1.8.0-sources.jar" -o sources.jar || true
+              if [ -f "sources.jar" ]; then
+                  unzip -o sources.jar "org/drinkless/td/libcore/telegram/TdApi.java" -d $GITHUB_WORKSPACE/java/ || \
+                  unzip -o sources.jar "org/drinkless/tdlib/TdApi.java" -d $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/
+              fi
+          fi
 
-      - name: Verify Generated Files
+          # 6. Normalize package name to match Client.java
+          sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java
+
+      - name: Verify Generated TdApi.java
         run: |
           echo "=== Verification ==="
           ls -lh java/org/drinkless/td/libcore/telegram/
@@ -51,5 +65,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add java/org/drinkless/td/libcore/telegram/TdApi.java
-          git commit -m "Add generated official TdApi.java" || echo "No changes"
+          git commit -m "Add official generated TdApi.java" || echo "No changes"
           git push
