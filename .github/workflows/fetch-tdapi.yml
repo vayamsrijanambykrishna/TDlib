@@ -22,7 +22,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build
 
-          # 1. Clone TDLib
+          # 1. Clone TDLib source
           git clone --depth 1 https://github.com/tdlib/td.git
           cd td
           mkdir build && cd build
@@ -31,41 +31,41 @@ jobs:
           cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON -GNinja ..
           ninja td_generate_java_api
 
-          # 3. Locate td_api.tl & generator binary dynamically
-          TL_FILE=$(find $GITHUB_WORKSPACE/td -name "td_api.tl" | head -n 1)
-          TL_DIR=$(dirname $(dirname "$TL_FILE"))
+          # 3. Locate generator binary and tl scheme
           GEN_BIN=$(find $GITHUB_WORKSPACE/td/build -name "td_generate_java_api" -type f | head -n 1)
+          TL_SRC=$(find $GITHUB_WORKSPACE/td -name "td_api.tl" | head -n 1)
 
-          echo "TL Directory: $TL_DIR"
-          echo "Generator Binary: $GEN_BIN"
+          # 4. Prepare dedicated generation workspace
+          mkdir -p $GITHUB_WORKSPACE/gen_work/scheme
+          mkdir -p $GITHUB_WORKSPACE/gen_work/auto/tlo/org/drinkless/tdlib
+          mkdir -p $GITHUB_WORKSPACE/gen_work/auto/org/drinkless/tdlib
+          mkdir -p $GITHUB_WORKSPACE/gen_work/auto/td/telegram
 
-          # 4. Create required directories and run generator
-          cd "$TL_DIR"
-          mkdir -p auto/tlo/org/drinkless/tdlib
-          mkdir -p auto/org/drinkless/tdlib
-          mkdir -p auto/td/telegram
-          
+          cp "$TL_SRC" $GITHUB_WORKSPACE/gen_work/scheme/td_api.tl
+
+          # 5. Execute generator from dedicated workspace
+          cd $GITHUB_WORKSPACE/gen_work
           "$GEN_BIN"
 
-          # 5. Copy generated TdApi.java
+          # 6. Copy generated file to repository folder
           cd $GITHUB_WORKSPACE
-          TDAPI_PATH=$(find td -name "TdApi.java" | head -n 1)
-          echo "Generated TdApi at: $TDAPI_PATH"
+          TDAPI_PATH=$(find $GITHUB_WORKSPACE -name "TdApi.java" | head -n 1)
+          echo "Generated TdApi found at: $TDAPI_PATH"
           cp "$TDAPI_PATH" java/org/drinkless/td/libcore/telegram/TdApi.java
 
-          # 6. Normalize package name to match Client.java
+          # 7. Normalize package name to match Client.java
           sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' java/org/drinkless/td/libcore/telegram/TdApi.java
 
       - name: Verify TdApi.java File
         run: |
-          echo "=== Verification ==="
+          echo "=== File Verification ==="
           ls -lh java/org/drinkless/td/libcore/telegram/
           
           FILE_SIZE=$(stat -c%s "java/org/drinkless/td/libcore/telegram/TdApi.java" 2>/dev/null || echo 0)
           echo "TdApi.java Size: $FILE_SIZE bytes"
           
           if [ "$FILE_SIZE" -lt 500000 ]; then
-              echo "Error: TdApi.java generation failed!"
+              echo "Error: TdApi.java was not generated properly!"
               exit 1
           fi
           
