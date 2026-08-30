@@ -17,48 +17,67 @@ jobs:
         run: |
           mkdir -p java/org/drinkless/td/libcore/telegram
 
-      - name: Generate Official TdApi.java via Ninja Target (~15 seconds)
+      - name: Generate Official TdApi.java (~15 seconds)
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build
 
-          # 1. Clone TDLib
+          # 1. Clone TDLib source
           git clone --depth 1 https://github.com/tdlib/td.git
           cd td
           mkdir build && cd build
 
-          # 2. Configure root TDLib with JNI
+          # 2. Build generator tool binary
           cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON -GNinja ..
+          ninja td_generate_java_api
 
-          # 3. Ninja से सीधे TdApi.java टारगेट को कॉल करें
-          TARGET=$(ninja -t targets all | grep -i "TdApi\.java" | cut -d':' -f1 | head -n 1)
-          echo "Discovered Ninja Target: $TARGET"
+          # 3. Locate files
+          OUT_TARGET="$GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java"
+          TL_FILE=$(find $GITHUB_WORKSPACE/td -name "td_api.tl" | head -n 1)
+          GEN_BIN=$(find $GITHUB_WORKSPACE/td/build -name "td_generate_java_api" -type f | head -n 1)
 
-          if [ -n "$TARGET" ]; then
-              ninja "$TARGET"
-          else
-              ninja prepare_cross_compiling
+          echo "TL Scheme: $TL_FILE"
+          echo "Generator: $GEN_BIN"
+
+          # 4. Generate with CLI parameters
+          "$GEN_BIN" "$TL_FILE" "$OUT_TARGET" || true
+
+          if [ ! -s "$OUT_TARGET" ]; then
+              "$GEN_BIN" "$OUT_TARGET" "$TL_FILE" || true
           fi
 
-          # 4. Copy generated file to destination
-          cd $GITHUB_WORKSPACE
-          TDAPI_FILE=$(find td -name "TdApi.java" | head -n 1)
-          echo "Generated TdApi found at: $TDAPI_FILE"
+          if [ ! -s "$OUT_TARGET" ]; then
+              cd "$(dirname "$TL_FILE")/.."
+              mkdir -p auto/tlo/org/drinkless/tdlib auto/org/drinkless/tdlib auto/td/telegram
+              "$GEN_BIN" || true
+              find . -name "TdApi.java" -exec cp {} "$OUT_TARGET" \;
+          fi
 
-          cp "$TDAPI_FILE" java/org/drinkless/td/libcore/telegram/TdApi.java
-          cp "$TDAPI_FILE" TdApi.java
+          if [ ! -s "$OUT_TARGET" ]; then
+              cd $GITHUB_WORKSPACE/td/build
+              NINJA_JAVA_TARGET=$(ninja -t targets | grep -i "TdApi.java" | cut -d: -f1 | head -n 1)
+              if [ -n "$NINJA_JAVA_TARGET" ]; then
+                  ninja "$NINJA_JAVA_TARGET" || true
+                  find $GITHUB_WORKSPACE/td -name "TdApi.java" -exec cp {} "$OUT_TARGET" \;
+              fi
+          fi
 
-          # 5. Fix package name to match Client.java
-          sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' java/org/drinkless/td/libcore/telegram/TdApi.java
+          # 5. Root directory backup copy
+          cp "$OUT_TARGET" $GITHUB_WORKSPACE/TdApi.java || true
 
-      - name: Verify TdApi.java
+          # 6. Normalize package name to match Client.java
+          sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' "$OUT_TARGET"
+
+      - name: Verify TdApi.java File
         run: |
-          echo "=== File Verification ==="
+          echo "=== Verification ==="
           ls -lh java/org/drinkless/td/libcore/telegram/
-          ls -lh TdApi.java
           
-          if [ ! -f "java/org/drinkless/td/libcore/telegram/TdApi.java" ]; then
-              echo "Error: TdApi.java missing!"
+          FILE_SIZE=$(stat -c%s "java/org/drinkless/td/libcore/telegram/TdApi.java" 2>/dev/null || echo 0)
+          echo "TdApi.java size: $FILE_SIZE bytes"
+          
+          if [ "$FILE_SIZE" -lt 500000 ]; then
+              echo "Error: TdApi.java was not generated!"
               exit 1
           fi
           
@@ -69,6 +88,6 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add java/org/drinkless/td/libcore/telegram/TdApi.java
-          git add TdApi.java
+          git add TdApi.java || true
           git commit -m "Add official generated TdApi.java" || echo "No changes"
           git push
