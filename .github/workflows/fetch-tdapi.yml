@@ -17,59 +17,54 @@ jobs:
         run: |
           mkdir -p java/org/drinkless/td/libcore/telegram
 
-      - name: Generate Official TdApi.java (~15 seconds)
+      - name: Official TdApi Generation via Ninja (Takes ~10 seconds)
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake gperf php-cli ninja-build
 
-          # 1. Clone TDLib source
+          # 1. Clone TDLib
           git clone --depth 1 https://github.com/tdlib/td.git
           cd td
           mkdir build && cd build
 
-          # 2. Build generator tool binary
+          # 2. Configure TDLib with JNI support
           cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON -GNinja ..
-          ninja td_generate_java_api
 
-          # 3. Locate exact scheme location & generator binary
-          TL_FILE=$(find $GITHUB_WORKSPACE/td -name "td_api.tl" -type f | head -n 1)
-          GEN_DIR=$(dirname $(dirname "$TL_FILE"))
-          GEN_BIN=$(find $GITHUB_WORKSPACE/td/build -name "td_generate_java_api" -type f -executable | head -n 1)
+          # 3. Discover exact TdApi.java Ninja build target
+          ninja -t targets > targets.txt
+          TARGET=$(grep -i "TdApi\.java" targets.txt | cut -d':' -f1 | head -n 1 | xargs)
+          echo "Discovered Target: '$TARGET'"
 
-          echo "Scheme Root Directory: $GEN_DIR"
-          echo "Generator Binary: $GEN_BIN"
+          # 4. Build only the Java API target
+          if [ -n "$TARGET" ]; then
+              ninja -v "$TARGET"
+          else
+              ninja td_generate_java_api
+              ninja tdjni || true
+          fi
 
-          # 4. Create all required sub-directories inside the scheme root
-          cd "$GEN_DIR"
-          mkdir -p auto/tlo/org/drinkless/tdlib
-          mkdir -p auto/tlo/org/drinkless/td/libcore/telegram
-          mkdir -p auto/org/drinkless/tdlib
-          mkdir -p auto/org/drinkless/td/libcore/telegram
-          mkdir -p auto/td/telegram
-
-          # 5. Run the official generator binary
-          "$GEN_BIN"
-
-          # 6. Locate generated TdApi.java and copy to repo
+          # 5. Copy generated TdApi.java to destination
           cd $GITHUB_WORKSPACE
-          GENERATED_FILE=$(find $GITHUB_WORKSPACE/td -name "TdApi.java" | head -n 1)
-          echo "Generated File: $GENERATED_FILE"
+          TDAPI_PATH=$(find td -name "TdApi.java" | head -n 1)
+          echo "Generated TdApi found at: $TDAPI_PATH"
 
-          cp "$GENERATED_FILE" java/org/drinkless/td/libcore/telegram/TdApi.java
+          cp "$TDAPI_PATH" java/org/drinkless/td/libcore/telegram/TdApi.java
+          cp "$TDAPI_PATH" TdApi.java
 
-          # 7. Normalize package declaration to match Client.java
+          # 6. Set package to match Client.java
           sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' java/org/drinkless/td/libcore/telegram/TdApi.java
 
       - name: Verify Generated TdApi.java
         run: |
           echo "=== File Verification ==="
           ls -lh java/org/drinkless/td/libcore/telegram/
+          ls -lh TdApi.java
           
           FILE_SIZE=$(stat -c%s "java/org/drinkless/td/libcore/telegram/TdApi.java" 2>/dev/null || echo 0)
           echo "TdApi.java Size: $FILE_SIZE bytes"
           
           if [ "$FILE_SIZE" -lt 500000 ]; then
-              echo "Error: TdApi.java file missing or empty!"
+              echo "Error: TdApi.java was not generated properly!"
               exit 1
           fi
           
@@ -80,5 +75,6 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add java/org/drinkless/td/libcore/telegram/TdApi.java
+          git add TdApi.java
           git commit -m "Add official generated TdApi.java" || echo "No changes"
           git push
