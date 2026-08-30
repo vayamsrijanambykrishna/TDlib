@@ -1,4 +1,4 @@
-name: Fetch and Add TdApi.java
+name: Compile Official TDLib from Source
 
 on:
   workflow_dispatch:
@@ -7,77 +7,129 @@ permissions:
   contents: write
 
 jobs:
-  get-tdapi:
+  build-tdlib:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Root Snatch Method (The Ultimate Fix)
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Safe Swap Space Configuration (RAM Protection)
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile || true
+          sudo fallocate -l 6G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
+      - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake gperf php-cli
+          sudo apt-get install -y make git zlib1g-dev gperf cmake clang libc++-dev libc++abi-dev php-cli ninja-build
+
+      - name: Create Destination Folders
+        run: |
+          mkdir -p jniLibs/arm64-v8a
+          mkdir -p java/org/drinkless/td/libcore/telegram
+
+      - name: 1. Clone and Compile OpenSSL 3 (ARM64)
+        run: |
+          git clone --depth 1 --branch openssl-3.1.5 https://github.com/openssl/openssl.git
+          cd openssl
           
-          TARGET_DIR="$GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram"
-          mkdir -p "$TARGET_DIR"
+          export ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME
+          export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
           
-          # 1. Clone Official TDLib
-          cd $GITHUB_WORKSPACE
-          git clone --depth 1 https://github.com/tdlib/td.git
+          ./Configure android-arm64 \
+                      -D__ANDROID_API__=24 \
+                      no-shared \
+                      no-tests \
+                      no-unit-test \
+                      --prefix=$GITHUB_WORKSPACE/openssl_arm64 \
+                      --openssldir=$GITHUB_WORKSPACE/openssl_arm64
+                      
+          make -j2
+          make install_sw
+          cd ..
+          
+          mkdir -p $GITHUB_WORKSPACE/openssl_arm64/lib
+          if [ -d "$GITHUB_WORKSPACE/openssl_arm64/lib64" ]; then
+              cp -rf $GITHUB_WORKSPACE/openssl_arm64/lib64/* $GITHUB_WORKSPACE/openssl_arm64/lib/ 2>/dev/null || true
+          fi
+
+      - name: 2. Generate TDLib JNI Source Files (Host Step)
+        run: |
+          git clone https://github.com/tdlib/td.git
           cd td
+          mkdir build_host && cd build_host
+          cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON -GNinja ..
+          ninja prepare_cross_compiling
+          cd ../..
+
+      - name: 3. Compile TDLib Android JNI (example/android)
+        run: |
+          cd td/example/android
           mkdir build && cd build
+
+          cmake -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
+                -DANDROID_ABI=arm64-v8a \
+                -DANDROID_PLATFORM=android-24 \
+                -DANDROID_STL=c++_static \
+                -DOPENSSL_ROOT_DIR=$GITHUB_WORKSPACE/openssl_arm64 \
+                -DOPENSSL_INCLUDE_DIR=$GITHUB_WORKSPACE/openssl_arm64/include \
+                -DOPENSSL_CRYPTO_LIBRARY=$GITHUB_WORKSPACE/openssl_arm64/lib/libcrypto.a \
+                -DOPENSSL_SSL_LIBRARY=$GITHUB_WORKSPACE/openssl_arm64/lib/libssl.a \
+                -DOPENSSL_USE_STATIC_LIBS=TRUE \
+                -DTD_ENABLE_JNI=ON \
+                -GNinja ..
+
+          # मुख्य कंपाइलेशन (यह अपने आप TdApi.java भी बना देगा)
+          ninja -j 2 tdjni
+
+          # तैयार बाइनरी फाइल को कॉपी करें
+          find $GITHUB_WORKSPACE/td -name "libtdjni.so" -exec cp {} $GITHUB_WORKSPACE/jniLibs/arm64-v8a/ \;
+
+          # तैयार जावा फाइल्स को सुरक्षित रूप से कॉपी करें
+          find $GITHUB_WORKSPACE/td -name "TdApi.java" -exec cp {} $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/ \;
+          find $GITHUB_WORKSPACE/td -name "Client.java" -exec cp {} $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/ \;
           
-          # 2. Configure Root TDLib (This ALWAYS works)
-          cmake -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=ON ..
+          # पैकेज का नाम आपके ऐप के हिसाब से सुनिश्चित करें
+          sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/TdApi.java
+          sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' $GITHUB_WORKSPACE/java/org/drinkless/td/libcore/telegram/Client.java
+          cd ../../../..
+
+      - name: 4. Verify Compiled Files
+        run: |
+          echo "=== Final Build Artifacts ==="
+          ls -lh jniLibs/arm64-v8a/
+          ls -lh java/org/drinkless/td/libcore/telegram/
           
-          # 3. Start standard build in the background
-          echo "Starting C++ build in background to generate TdApi.java..."
-          make -j2 &
-          BUILD_PID=$!
-          
-          # 4. Watch for the file and Snatch it!
-          echo "Monitoring for TdApi.java..."
-          SUCCESS=0
-          
-          # 90 बार (लगभग 3 मिनट तक) हर 2 सेकंड में चेक करेगा
-          for i in {1..90}; do
-              TDAPI_FILE=$(find $GITHUB_WORKSPACE/td -name "TdApi.java" | head -n 1)
-              
-              if [ -n "$TDAPI_FILE" ] && [ -f "$TDAPI_FILE" ]; then
-                  SIZE=$(stat -c%s "$TDAPI_FILE" 2>/dev/null || echo 0)
-                  # TdApi.java असली होगी तो उसका साइज़ 500KB से ज्यादा होगा
-                  if [ "$SIZE" -gt 500000 ]; then
-                      echo "✅ TdApi.java successfully generated and snatched! Size: $SIZE bytes"
-                      cp "$TDAPI_FILE" "$TARGET_DIR/TdApi.java"
-                      SUCCESS=1
-                      break
-                  fi
-              fi
-              sleep 2
-          done
-          
-          # 5. Kill the compiler so workflow doesn't run for 40 mins
-          echo "Stopping the background C++ compiler..."
-          kill -9 $BUILD_PID || true
-          
-          if [ "$SUCCESS" -eq 0 ]; then
-              echo "❌ Error: TdApi.java was not generated."
+          SO_SIZE=$(stat -c%s "jniLibs/arm64-v8a/libtdjni.so" 2>/dev/null || echo 0)
+          if [ "$SO_SIZE" -lt 10000000 ]; then
+              echo "Error: libtdjni.so compilation failed or file missing."
               exit 1
           fi
-          
-          # 6. Change the package name to match your app
-          sed -i 's/^package .*/package org.drinkless.td.libcore.telegram;/' "$TARGET_DIR/TdApi.java"
 
-      - name: Final Verification
-        run: |
-          echo "=== Verification ==="
-          ls -lh java/org/drinkless/td/libcore/telegram/
-          head -n 10 java/org/drinkless/td/libcore/telegram/TdApi.java
+          if [ ! -f "java/org/drinkless/td/libcore/telegram/TdApi.java" ]; then
+              echo "Error: TdApi.java is missing."
+              exit 1
+          fi
 
-      - name: Commit TdApi.java to Repo
+      - name: 5. Commit and Push Pure Binaries to Repo
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add java/org/drinkless/td/libcore/telegram/TdApi.java
-          git commit -m "Add official TdApi.java via Root Snatch method" || echo "No changes"
+          git add jniLibs/
+          git add java/
+          git commit -m "Add natively compiled TDLib 64-bit binary and Java bindings from official source" || echo "No changes"
           git push
